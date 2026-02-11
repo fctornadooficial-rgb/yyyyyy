@@ -1,20 +1,26 @@
 import os
+import sys
 import telebot
 from flask import Flask, request
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
-# ---------- ТОКЕН БЕЗОПАСНО ----------
-# На Render создайте переменную окружения BOT_TOKEN со значением вашего токена
+# ---------- ЛОГИРОВАНИЕ ----------
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
+
+# ---------- ТОКЕН ----------
 TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("❌ Токен не найден! Укажите BOT_TOKEN в переменных окружения.")
-
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# ---------- ВЕСЬ ВАШ СТАРЫЙ КОД (КОНТЕНТ) ----------
-# Всё, что у вас было после создания бота, переносится сюда без изменений
-
+# ---------- ВСЕ ВАШИ ДАННЫЕ ----------
 START_MESSAGE = """Добро пожаловать в официальный бот поддержки ФК «Торнадо»!
 
 Здесь вы можете получить помощь по вопросам:
@@ -77,45 +83,72 @@ def create_main_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
+# ---------- ОБРАБОТЧИКИ КОМАНД ----------
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    logger.info(f"Получена команда /start от {message.from_user.id}")
     keyboard = create_main_keyboard()
-    bot.send_message(message.chat.id, START_MESSAGE,
-                     reply_markup=keyboard,
-                     parse_mode='HTML')
+    bot.send_message(
+        message.chat.id,
+        START_MESSAGE,
+        reply_markup=keyboard,
+        parse_mode='HTML'
+    )
+    logger.info(f"Отправлено приветствие пользователю {message.from_user.id}")
 
 @bot.message_handler(func=lambda message: True)
 def handle_buttons(message):
     text = message.text
+    logger.info(f"Получено сообщение от {message.from_user.id}: {text}")
+    
     for key, button_text in SUPPORT_SECTIONS.items():
         if text == button_text:
             response = SECTION_RESPONSES.get(key, "Раздел в разработке.")
             bot.send_message(message.chat.id, response, parse_mode='HTML')
+            logger.info(f"Отправлен ответ на кнопку {key}")
             return
-    bot.send_message(message.chat.id,
-                     "Пожалуйста, используйте кнопки ниже для навигации.",
-                     reply_markup=create_main_keyboard())
+    
+    bot.send_message(
+        message.chat.id,
+        "Пожалуйста, используйте кнопки ниже для навигации.",
+        reply_markup=create_main_keyboard()
+    )
+    logger.info(f"Отправлено напоминание о кнопках")
 
 # ---------- WEBHOOK ----------
 @app.route('/', methods=['POST', 'GET'])
 def webhook():
     if request.method == 'POST':
-        update = telebot.types.Update.de_json(request.stream.read().decode('utf-8'))
-        bot.process_new_updates([update])
-        return 'ok', 200
+        try:
+            # Читаем JSON из запроса
+            json_str = request.get_data().decode('UTF-8')
+            logger.info(f"Получен webhook: {json_str[:200]}...")  # первые 200 символов
+            
+            # Преобразуем в объект Update
+            update = telebot.types.Update.de_json(json_str)
+            
+            # Передаём боту
+            bot.process_new_updates([update])
+            logger.info("Обновление передано боту")
+            
+            return 'ok', 200
+        except Exception as e:
+            logger.error(f"Ошибка при обработке webhook: {e}", exc_info=True)
+            return 'error', 500
     elif request.method == 'GET':
-        return "✅ Бот ФК «Торнадо» работает!", 200
+        return "✅ Бот ФК «Торнадо» работает! Логирование включено.", 200
 
-# (Опционально) эндпоинт для установки вебхука — можно вызвать 1 раз в браузере
 @app.route('/setwebhook')
 def set_webhook():
-    # Render даст вам URL вида https://название-проекта.onrender.com
     webhook_url = request.url_root.rstrip('/') + '/'
     success = bot.set_webhook(url=webhook_url)
     if success:
+        logger.info(f"Вебхук установлен на {webhook_url}")
         return f"✅ Вебхук установлен на {webhook_url}", 200
     else:
+        logger.error("Ошибка установки вебхука")
         return "❌ Ошибка установки вебхука", 400
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
