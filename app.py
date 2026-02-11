@@ -4,7 +4,7 @@ import telebot
 from flask import Flask, request
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
-# ---------- ЛОГИРОВАНИЕ В STDOUT (для Render) ----------
+# ---------- ЛОГИРОВАНИЕ ----------
 import logging
 logging.basicConfig(
     level=logging.INFO,
@@ -92,56 +92,61 @@ def create_main_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-# ---------- ОБРАБОТЧИКИ КОМАНД С ЗАЩИТОЙ ОТ ОШИБОК ----------
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
+# ---------- РУЧНАЯ ОБРАБОТКА СООБЩЕНИЙ ----------
+def process_message(message):
+    """Обрабатывает входящее сообщение и отправляет ответ."""
     try:
-        logger.info(f"🔥 Команда /start от {message.from_user.id}")
-        keyboard = create_main_keyboard()
-        bot.send_message(
-            message.chat.id,
-            START_MESSAGE,
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-        logger.info(f"✅ Приветствие отправлено {message.from_user.id}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка в send_welcome: {e}", exc_info=True)
-
-@bot.message_handler(func=lambda message: True)
-def handle_buttons(message):
-    try:
+        chat_id = message.chat.id
         text = message.text
-        logger.info(f"💬 Сообщение от {message.from_user.id}: {text}")
+        user_id = message.from_user.id
         
+        logger.info(f"💬 Обработка сообщения от {user_id}: {text}")
+        
+        # Команда /start
+        if text == '/start':
+            keyboard = create_main_keyboard()
+            bot.send_message(
+                chat_id,
+                START_MESSAGE,
+                reply_markup=keyboard,
+                parse_mode='HTML'
+            )
+            logger.info(f"✅ Отправлено приветствие {user_id}")
+            return
+        
+        # Проверка нажатия кнопок
         for key, button_text in SUPPORT_SECTIONS.items():
             if text == button_text:
                 response = SECTION_RESPONSES.get(key, "Раздел в разработке.")
-                bot.send_message(message.chat.id, response, parse_mode='HTML')
-                logger.info(f"✅ Отправлен ответ на кнопку {key}")
+                bot.send_message(chat_id, response, parse_mode='HTML')
+                logger.info(f"✅ Отправлен ответ на кнопку {key} для {user_id}")
                 return
         
+        # Если сообщение не распознано
         bot.send_message(
-            message.chat.id,
+            chat_id,
             "Пожалуйста, используйте кнопки ниже для навигации.",
             reply_markup=create_main_keyboard()
         )
-        logger.info(f"✅ Отправлено напоминание о кнопках")
+        logger.info(f"✅ Отправлено напоминание о кнопках для {user_id}")
+        
     except Exception as e:
-        logger.error(f"❌ Ошибка в handle_buttons: {e}", exc_info=True)
+        logger.error(f"❌ Ошибка при обработке сообщения: {e}", exc_info=True)
 
 # ---------- WEBHOOK ----------
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 def webhook():
-    """Обрабатывает все HTTP-методы, всегда возвращает ответ."""
     if request.method == 'POST':
         try:
             json_str = request.get_data().decode('UTF-8')
-            logger.info(f"📦 Webhook POST: {json_str[:200]}...")
+            logger.info(f"📦 Webhook POST получен")
             
             update = telebot.types.Update.de_json(json_str)
-            bot.process_new_updates([update])
-            logger.info("✅ Обновление передано боту")
+            
+            # Если есть сообщение от пользователя — обрабатываем
+            if update.message:
+                process_message(update.message)
+            # Если есть callback query — можно добавить позже
             
             return 'ok', 200
         except Exception as e:
@@ -149,13 +154,12 @@ def webhook():
             return 'error', 500
     
     elif request.method == 'HEAD':
-        # Render отправляет HEAD-запросы для проверки здоровья
+        # Render проверяет здоровье
         return '', 200
     
     elif request.method == 'GET':
-        return "✅ Бот ФК «Торнадо» работает! Логирование включено.", 200
+        return "✅ Бот ФК «Торнадо» работает! Ручная обработка.", 200
     
-    # На всякий случай
     return 'Method not allowed', 405
 
 @app.route('/setwebhook')
@@ -172,4 +176,3 @@ def set_webhook():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
